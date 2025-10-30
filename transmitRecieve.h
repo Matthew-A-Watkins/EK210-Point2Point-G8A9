@@ -1,43 +1,45 @@
-#pragma once
+#ifndef TRANSMITRECIEVE_H
+#define TRANSMITRECIEVE_H
 
 #include <Arduino.h>
-#define EOT 0x04 // end transmission character
-#define SOT 0x21 // Start of transmission character
-#define ACK 0x06 // aknowlege character
-#define NAK 0x15 // not aknowlege
-#define dt 10000 // period in us
-#define sensorPin 9
+#define EOT 0x04  // End of Transmission character (ASCII EOT):contentReference[oaicite:9]{index=9}
+#define SOT 0x21  // Start of Transmission indicator ('!' in ASCII)
+#define ACK 0x06  // Acknowledge character (ASCII ACK):contentReference[oaicite:10]{index=10}
+#define NAK 0x15  // Not-Acknowledge character (ASCII NAK):contentReference[oaicite:11]{index=11}
+#define dt  10000 // Bit period in microseconds (transmission rate timing)
 
+extern int transmitPin;  // pin used for transmitting IR (to IR LED or test wire)
+extern int sensorPin;    // pin used for receiving IR (from photodiode or test wire)
 
-// transmits a message and returns the sum of the bits as a char 
-// NOTE THE LAST CHARACTER OF MSG WILL BE SET TO EOT
-char transmit(char* msg, int length){
-  msg[length - 1] = EOT; // set the end of transmission value
+// Transmit a message buffer of given length (last byte will be set to EOT).
+// Sends each bit with timing dt and returns the checksum (sum of all bits mod 256).
+char transmit(char* msg, int length) {
+  msg[length - 1] = EOT;  // ensure the last character is EOT
   char checkSum = 0;
-  for (int i = 0; i < length; i++){
+  for (int i = 0; i < length; i++) {
     char c = msg[i];
-    for (int j = 7; j >= 0; --j){
-      bool curBit = c >> j & 1; // read the jth bit
-      checkSum += curBit; // increment checksum
+    for (int j = 7; j >= 0; --j) {
+      bool curBit = (c >> j) & 1;       // extract j-th bit (MSB first)
+      checkSum += (curBit ? 1 : 0);     // accumulate checksum (count 1 bits)
       digitalWrite(transmitPin, curBit);
       delayMicroseconds(dt);
     }
   }
-  return (checksum);
+  // Optionally, turn off the transmit pin after sending the message:
+  digitalWrite(transmitPin, LOW);
+  return checkSum;
 }
 
-// uses the bitshift method to recieve the bits dirrectly into the message, returns checksum(sum of all bits)
-char recieve(char* msg, int length + 1){
+// Receive a message of given length into msg buffer using bit-shift method.
+// (Note: length should include space for EOT; this function does not stop on EOT automatically.)
+char recieve(char* msg, int length) {
   char checkSum = 0;
-  for (int i = 0; i < length; i++){
+  for (int i = 0; i < length; i++) {
     char c = 0x00;
-    bool curBit = 0;
-    // go bit by bit
-    for (int j = 0; j < 8; j++){
-      // read the sensor
-      curBit = digitalRead(sensorPin);
-      checkSum += curBit;
-      c += curBit << j; // add the current bit shifted by its place
+    for (int j = 0; j < 8; j++) {
+      bool curBit = digitalRead(sensorPin);
+      checkSum += (curBit ? 1 : 0);
+      c |= (curBit << j);  // assemble byte from bits (LSB-first order as transmitted)
       delayMicroseconds(dt);
     }
     msg[i] = c;
@@ -45,73 +47,53 @@ char recieve(char* msg, int length + 1){
   return checkSum;
 }
 
-// transmits a single character
-void TransmitChar(char c){
-  for (int i = 7; i >= 0; i--){
-    digitalWrite(transmitPin, c >> i & 1);
+// Transmit a single character (8 bits) via IR or wire.
+void TransmitChar(char c) {
+  for (int i = 7; i >= 0; i--) {
+    bool bitVal = (c >> i) & 1;
+    digitalWrite(transmitPin, bitVal);
     delayMicroseconds(dt);
   }
+  digitalWrite(transmitPin, LOW);  // ensure line is low after sending byte
 }
 
-// recieves a single char
-char recieveChar(){
+// Receive a single character (8 bits) from IR sensor or wire.
+char recieveChar() {
   char c = 0x00;
-  for(int i = 7; i >= 0; i--){
-    c += digitalRead(sensorPin) << i; // add the value * 2^i
+  for (int i = 7; i >= 0; i--) {
+    bool bitVal = digitalRead(sensorPin);
+    c |= (bitVal << i);
     delayMicroseconds(dt);
   }
-  return(c);
+  return c;
 }
 
-// gets the start of transmission, returns 1 when it has recieved the go code
+// Wait for the Start-of-Transmission pattern. 
+// Reads incoming bits until the 8-bit SOT byte is recognized. Returns true when SOT is detected.
 bool awaitTransmission() {
   char c = 0;
-  while(decodeBits(buffer) != SOT){
+  while (true) {
     bool curBit = digitalRead(sensorPin);
-    c = c << 1 + curBit;
+    c = (c << 1) | (curBit ? 1 : 0);   // shift in the new bit (keep last 8 bits in 'c')
     delayMicroseconds(dt);
+    if (c == SOT) {
+      return true;  // SOT sequence detected
+    }
   }
-  return 1;
+  // (Function will return once SOT is found. If needed, a timeout could be added to prevent infinite loop.)
 }
 
-// looks for an aknowledge or a not aknowledge response and returns such
-bool seekAKG(){
+// Wait for either an ACK or NAK response from the other side. 
+// Returns true if ACK received, false if NAK received.
+bool seekACK() {
   char c = 0;
-  while(c != AKG && c != NAK){
+  while (true) {
     bool curBit = digitalRead(sensorPin);
-    c = c << 1 + curBit;
+    c = (c << 1) | (curBit ? 1 : 0);
     delayMicroseconds(dt);
-  }
-  if (c == AKG) return true;
-  return false;
-}
-
-// old buffer based system (It's kinda cheeks tbh)
-
-// recieves the message into a binary array and returns the checksum
-char recieveOld(bool* signal, int length) {
-  char checkSum = 0x00;
-  bool curBit = 0;
-  // read the bits and add them to the message
-  for(int i = 0; i < length; i++){
-    curBit = digitalRead(sensorPin);
-    checkSum += curBit;
-    delayMicroseconds(dt);
-    signal[i] = curBit;
+    if (c == ACK)  return true;
+    if (c == NAK)  return false;
   }
 }
 
-// transmits the binary signal and returns the checksum
-char TransmitOld(bool* signal, int length){
-  char checkSum = 0;
-  bool curBit = 0;
-  // send the start signal
-  digitalWrite(transmitPin, 1);
-  delay(dt);
-  for (int i = 0; i < length * 8; i++){
-    curBit = signal[i];
-    checkSum += curBit;
-    digitalWrite(transmitPin, curBit);
-    delayMicroseconds(dt);
-  }
-}
+#endif
