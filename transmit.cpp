@@ -28,6 +28,66 @@ char messageBuffer[MAX_MSG_LEN + 1]; // + 1 for EOT
 int  msgLength = 0;
 
 enum Mode { IDLE=0, ALIGNMENT, EDIT_MESSAGE, TRANSMIT, TEST } mode = IDLE;
+enum AlignMode { ALIGN_MENU=0, ALIGN_SWEEP, ALIGN_MANUAL } alignMode = ALIGN_MENU;
+
+// ----------------- helpers -----------------
+void showMenu() {
+  lcd.clear();
+  lcd.setCursor(0,0); lcd.print("Select mode:");
+  lcd.setCursor(0,1); lcd.print("[A]lign [M]sg");
+  lcd.setCursor(0,2); lcd.print("[S]end [W]ire");
+  Serial.println("Enter mode: A=Align, M=Edit, S=Send, W=Wired Test");
+}
+
+void showAlignMenu() {
+  lcd.clear();
+  lcd.setCursor(0,0); lcd.print("Alignment:");
+  lcd.setCursor(0,1); lcd.print("[S] Sweep");
+  lcd.setCursor(0,2); lcd.print("[M] Manual");
+  lcd.setCursor(0,3); lcd.print("[Q] Back");
+  Serial.println("Alignment: S=Auto Sweep, M=Manual, Q=Back");
+}
+
+int sampleSignal(unsigned long ms=200) {
+  // sample IR sensor for 'ms' milliseconds; return number of HIGH reads
+  int count = 0;
+  unsigned long start = millis();
+  while (millis() - start < ms) {
+    count += digitalRead(IR_SENSOR_PIN);
+    delay(5);
+  }
+  return count;
+}
+
+void printAlignHUD_Manual(int angle, int step, int pulseCount) {
+  lcd.clear();
+  lcd.setCursor(0,0); lcd.print("Align: Manual");
+  lcd.setCursor(0,1); lcd.print("Ang:"); lcd.print(angle);
+  lcd.print(" Step:"); lcd.print(step);
+  lcd.setCursor(0,2); lcd.print("Sig:");
+  lcd.print(pulseCount>0 ? "YES" : "NO ");
+  lcd.print(" Cnt:"); lcd.print(pulseCount);
+  lcd.setCursor(0,3); lcd.print("J/L +/-  [/]");
+  // Serial mirror
+  Serial.print("[Manual] Angle="); Serial.print(angle);
+  Serial.print(" Step="); Serial.print(step);
+  Serial.print(" Signal="); Serial.print(pulseCount>0 ? "YES" : "NO");
+  Serial.print(" Count="); Serial.println(pulseCount);
+}
+
+void printAlignHUD_Sweep(int angle, int pulseCount) {
+  lcd.clear();
+  lcd.setCursor(0,0); lcd.print("Align: Sweep");
+  lcd.setCursor(0,1); lcd.print("Angle:"); lcd.print(angle);
+  lcd.setCursor(0,2); lcd.print("Sig:");
+  lcd.print(pulseCount>0 ? "YES" : "NO ");
+  lcd.print(" Cnt:"); lcd.print(pulseCount);
+  lcd.setCursor(0,3); lcd.print("[M]Manual [Q]Back");
+  // Serial mirror
+  Serial.print("[Sweep] Angle="); Serial.print(angle);
+  Serial.print(" Signal="); Serial.print(pulseCount>0 ? "YES" : "NO");
+  Serial.print(" Count="); Serial.println(pulseCount);
+}
 
 void showMenu() {
   lcd.clear();
@@ -102,39 +162,89 @@ void loop() {
     return; // wait until a mode is chosen
   }
 
-  // --------------------- ALIGNMENT MODE ----------------------
+    // --------------------- ALIGNMENT MODE ----------------------
   if (mode == ALIGNMENT) {
-    // Sweep and watch for serial to change mode at any time
-    for (int angle = 0; angle <= 180; angle += 5) {
-      // If user typed a new mode, switch immediately
+
+    // 1) Alignment sub-menu
+    if (alignMode == ALIGN_MENU) {
       if (Serial.available()) {
         char s = toupper(Serial.read());
-        if (s=='M'){ mode=EDIT_MESSAGE; lcd.clear(); lcd.print("Mode: Edit Msg"); Serial.println("-> Edit Mode"); return; }
-        if (s=='S'){ mode=TRANSMIT; transmitPin=IR_LED_PIN; sensorPin=IR_SENSOR_PIN; lcd.clear(); lcd.print("Mode: Transmit"); Serial.println("-> Transmit Mode"); return; }
-        if (s=='W'){ mode=TEST; transmitPin=TEST_TX_PIN; sensorPin=TEST_RX_PIN; lcd.clear(); lcd.print("Mode: Test (wired)"); Serial.println("-> Test Mode"); return; }
-        if (s=='Q'){ mode=IDLE; Serial.println("Alignment aborted."); showMenu(); return; }
+        if (s == 'S') { alignMode = ALIGN_SWEEP; }
+        else if (s == 'M') { alignMode = ALIGN_MANUAL; }
+        else if (s == 'Q') { mode = IDLE; showMenu(); return; }
+        // refresh menu line lightly to keep LCD responsive
       }
-
-      alignServo.write(angle);
-      delay(100);
-
-      int pulseCount = 0;
-      unsigned long start = millis();
-      while (millis() - start < 200) {  // sample 200ms at this angle
-        pulseCount += digitalRead(IR_SENSOR_PIN);
-        delay(5);
-      }
-
-      lcd.clear();
-      lcd.print("Angle:"); lcd.print(angle);
-      lcd.print(" Sig:"); lcd.print(pulseCount>0 ? "YES":"NO");
-      Serial.print("Angle "); Serial.print(angle);
-      Serial.println(pulseCount>0 ? " -> Signal DETECTED" : " -> No signal");
+      return;
     }
 
-    // Finished a sweep; remain in ALIGNMENT or let user switch
-    // (auto-repeat sweep)
-    return;
+    // 2) Sweep (auto scan 0..180..repeat)
+    if (alignMode == ALIGN_SWEEP) {
+      for (int angle = 0; angle <= 180; angle += 5) {
+
+        // instant switch to other modes/options
+        if (Serial.available()) {
+          char s = toupper(Serial.read());
+          if (s=='M'){ alignMode=ALIGN_MANUAL; return; }
+          if (s=='Q'){ mode=IDLE; showMenu(); return; }
+          if (s=='S'){ /* already in sweep; ignore */ }
+          if (s=='W'){ mode=TEST; transmitPin=TEST_TX_PIN; sensorPin=TEST_RX_PIN; lcd.clear(); lcd.print("Mode: Test (wired)"); Serial.println("-> Test Mode"); return; }
+          if (s=='E' || s=='X'){ mode=EDIT_MESSAGE; lcd.clear(); lcd.print("Mode: Edit Msg"); Serial.println("-> Edit Mode"); return; }
+          if (s=='T'){ mode=TRANSMIT; transmitPin=IR_LED_PIN; sensorPin=IR_SENSOR_PIN; lcd.clear(); lcd.print("Mode: Transmit"); Serial.println("-> Transmit Mode"); return; }
+        }
+
+        alignServo.write(angle);
+        delay(100);
+        int pulseCount = sampleSignal(200);
+        printAlignHUD_Sweep(angle, pulseCount);
+      }
+      // After finishing a sweep, immediately loop back to continue sweeping
+      return;
+    }
+
+    // 3) Manual alignment (keyboard driven)
+    if (alignMode == ALIGN_MANUAL) {
+      static int angle = 90;     // keep last angle while in manual
+      static int step  = 5;      // default step
+      // clamp & move
+      if (angle < 0) angle = 0;
+      if (angle > 180) angle = 180;
+      alignServo.write(angle);
+
+      // Sample at current angle and draw HUD
+      int pulseCount = sampleSignal(150);
+      printAlignHUD_Manual(angle, step, pulseCount);
+
+      // Handle keyboard
+      if (Serial.available()) {
+        char s = Serial.read();
+        char S = toupper(s);
+        switch (S) {
+          // coarse move
+          case 'J': angle -= step; if (angle < 0) angle = 0; break;
+          case 'L': angle += step; if (angle > 180) angle = 180; break;
+          // fine nudge
+          case '[': angle -= 1; if (angle < 0) angle = 0; break;
+          case ']': angle += 1; if (angle > 180) angle = 180; break;
+          // step size adjust
+          case '+': if (step < 30) step++; break;
+          case '-': if (step > 1)  step--; break;
+          // presets
+          case 'C': angle = 90; break;
+          case 'Z': angle = 0;  break;
+          case 'X': angle = 180; break;
+          // switch / exit
+          case 'S': alignMode = ALIGN_SWEEP; return;
+          case 'Q': mode = IDLE; showMenu(); return;
+
+          // convenience: allow quick jumps into other top modes
+          case 'W': mode=TEST; transmitPin=TEST_TX_PIN; sensorPin=TEST_RX_PIN; lcd.clear(); lcd.print("Mode: Test (wired)"); Serial.println("-> Test Mode"); return;
+          case 'E': case 'M': mode=EDIT_MESSAGE; lcd.clear(); lcd.print("Mode: Edit Msg"); Serial.println("-> Edit Mode"); return;
+          case 'T': mode=TRANSMIT; transmitPin=IR_LED_PIN; sensorPin=IR_SENSOR_PIN; lcd.clear(); lcd.print("Mode: Transmit"); Serial.println("-> Transmit Mode"); return;
+        }
+      }
+      // keep looping manual
+      return;
+    }
   }
 
   // --------------------- MESSAGE EDIT MODE -------------------
