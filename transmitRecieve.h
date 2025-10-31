@@ -1,99 +1,62 @@
-#ifndef TRANSMITRECIEVE_H
-#define TRANSMITRECIEVE_H
+#ifndef TRANSMITRECEIVE_H
+#define TRANSMITRECEIVE_H
 
 #include <Arduino.h>
-#define EOT 0x04  // End of Transmission character (ASCII EOT):contentReference[oaicite:9]{index=9}
-#define SOT 0x21  // Start of Transmission indicator ('!' in ASCII)
-#define ACK 0x06  // Acknowledge character (ASCII ACK):contentReference[oaicite:10]{index=10}
-#define NAK 0x15  // Not-Acknowledge character (ASCII NAK):contentReference[oaicite:11]{index=11}
-#define dt  10000 // Bit period in microseconds (transmission rate timing)
+#include <stdint.h>
 
-extern int transmitPin;  // pin used for transmitting IR (to IR LED or test wire)
-extern int sensorPin;    // pin used for receiving IR (from photodiode or test wire)
+// Protocol control characters
+#define SOT 0x11   // Start of Transmission (0x11, DC1 control code)
+#define EOT 0x04   // End of Transmission (0x04, EOT control code)
+#define NAK 0x15   // Not-Acknowledge (0x15, NAK control code)
 
-// Transmit a message buffer of given length (last byte will be set to EOT).
-// Sends each bit with timing dt and returns the checksum (sum of all bits mod 256).
-char transmit(char* msg, int length) {
-  msg[length - 1] = EOT;  // ensure the last character is EOT
-  char checkSum = 0;
-  for (int i = 0; i < length; i++) {
-    char c = msg[i];
-    for (int j = 7; j >= 0; --j) {
-      bool curBit = (c >> j) & 1;       // extract j-th bit (MSB first)
-      checkSum += (curBit ? 1 : 0);     // accumulate checksum (count 1 bits)
-      digitalWrite(transmitPin, curBit);
-      delayMicroseconds(dt);
+#define BIT_PERIOD_US 100000  // Bit period in microseconds (100 ms per bit)
+
+extern int transmitPin;   // Pin used for transmitting bits
+extern int sensorPin;     // Pin used for receiving bits
+
+// Transmit a single byte (8 bits), MSB-first, on the transmit pin
+static inline void TransmitChar(uint8_t data) {
+    for (int i = 7; i >= 0; --i) {
+        bool bitVal = (data >> i) & 0x01;
+        digitalWrite(transmitPin, bitVal ? HIGH : LOW);
+        delayMicroseconds(BIT_PERIOD_US);
     }
-  }
-  // Optionally, turn off the transmit pin after sending the message:
-  digitalWrite(transmitPin, LOW);
-  return checkSum;
+    // Ensure the line is driven LOW after the byte (idle state)
+    digitalWrite(transmitPin, LOW);
 }
 
-// Receive a message of given length into msg buffer using bit-shift method.
-// (Note: length should include space for EOT; this function does not stop on EOT automatically.)
-char recieve(char* msg, int length) {
-  char checkSum = 0;
-  for (int i = 0; i < length; i++) {
-    char c = 0x00;
-    for (int j = 0; j < 8; j++) {
-      bool curBit = digitalRead(sensorPin);
-      checkSum += (curBit ? 1 : 0);
-      c |= (curBit << j);  // assemble byte from bits (LSB-first order as transmitted)
-      delayMicroseconds(dt);
+// Receive a single byte (8 bits), MSB-first, from the sensor pin.
+// Samples each bit at the midpoint of its period for reliability.
+// Returns the byte via the reference parameter.
+static inline bool receiveByte(uint8_t &outByte) {
+    uint8_t value = 0;
+    unsigned long bitStart = micros();
+    for (int i = 7; i >= 0; --i) {
+        // Wait until the middle of the current bit period
+        unsigned long midBit = bitStart + BIT_PERIOD_US/2;
+        while (micros() < midBit) {
+            // busy-wait until midpoint
+        }
+        bool bitVal = digitalRead(sensorPin);
+        value |= (static_cast<uint8_t>(bitVal) << i);
+        bitStart += BIT_PERIOD_US;
     }
-    msg[i] = c;
-  }
-  return checkSum;
+    outByte = value;
+    return true;
 }
 
-// Transmit a single character (8 bits) via IR or wire.
-void TransmitChar(char c) {
-  for (int i = 7; i >= 0; i--) {
-    bool bitVal = (c >> i) & 1;
-    digitalWrite(transmitPin, bitVal);
-    delayMicroseconds(dt);
-  }
-  digitalWrite(transmitPin, LOW);  // ensure line is low after sending byte
-}
-
-// Receive a single character (8 bits) from IR sensor or wire.
-char recieveChar() {
-  char c = 0x00;
-  for (int i = 7; i >= 0; i--) {
-    bool bitVal = digitalRead(sensorPin);
-    c |= (bitVal << i);
-    delayMicroseconds(dt);
-  }
-  return c;
-}
-
-// Wait for the Start-of-Transmission pattern. 
-// Reads incoming bits until the 8-bit SOT byte is recognized. Returns true when SOT is detected.
-bool awaitTransmission() {
-  char c = 0;
-  while (true) {
-    bool curBit = digitalRead(sensorPin);
-    c = (c << 1) | (curBit ? 1 : 0);   // shift in the new bit (keep last 8 bits in 'c')
-    delayMicroseconds(dt);
-    if (c == SOT) {
-      return true;  // SOT sequence detected
+// Wait for the Start-of-Transmission byte (SOT) on the sensor pin.
+// Continuously reads bits into a shift register until SOT (0x11) is detected.
+static inline bool awaitTransmissionStart() {
+    uint8_t shiftReg = 0;
+    while (true) {
+        bool bitVal = digitalRead(sensorPin);
+        shiftReg = static_cast<uint8_t>(((shiftReg << 1) | (bitVal ? 1 : 0)) & 0xFF);
+        delayMicroseconds(BIT_PERIOD_US);
+        if (shiftReg == SOT) {
+            return true;
+        }
     }
-  }
-  // (Function will return once SOT is found. If needed, a timeout could be added to prevent infinite loop.)
-}
-
-// Wait for either an ACK or NAK response from the other side. 
-// Returns true if ACK received, false if NAK received.
-bool seekACK() {
-  char c = 0;
-  while (true) {
-    bool curBit = digitalRead(sensorPin);
-    c = (c << 1) | (curBit ? 1 : 0);
-    delayMicroseconds(dt);
-    if (c == ACK)  return true;
-    if (c == NAK)  return false;
-  }
 }
 
 #endif
