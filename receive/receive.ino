@@ -1,5 +1,6 @@
 #include <IRremote.hpp>
 #include <LiquidCrystal_I2C.h>
+#include <string.h>
 
 LiquidCrystal_I2C lcd(0x27, 20, 4);
 
@@ -59,7 +60,7 @@ void loop() {
       recMsg[msgLength++] = receivedChar;
       lcd.print(receivedChar);
 
-      if (msgLength % 20 == 0) lcd.setCursor(++currentLine, 0);
+      if (msgLength % 20 == 0) lcd.setCursor(0, ++currentLine);
     } else {
       Serial.print('X');
       recMsg[msgLength++] = 'X';
