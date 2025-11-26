@@ -11,13 +11,15 @@ int currentLine = 0;
 
 void setup() {
   Serial.begin(9600);
-  delay(200);
-
-  IrReceiver.begin(4, ENABLE_LED_FEEDBACK);  // RECEIVER PIN IS FIRST ARGUMENT, CHANGE TO ALTER PIN
+  pinMode(3, OUTPUT);
+  //IR
+  IrReceiver.begin(4, ENABLE_LED_FEEDBACK, 3);  // RECEIVER PIN IS FIRST ARGUMENT, CHANGE TO ALTER PIN
   Serial.println(F("IR Receiver ready"));
+
+  // LCD
   lcd.init();
   lcd.backlight();
-  lcd.setCursor(0, 0);
+  lcd.clear();
   lcd.print("WAITING TO RECEIVE");
 }
 
@@ -32,7 +34,25 @@ void loop() {
 
     Serial.print(F("Protocol="));  // IF PROTOCOL IS NOT NEC IT WAS HANDLED IMPROPERLY
     Serial.print(getProtocolString(IrReceiver.decodedIRData.protocol));
+    Serial.println();
 
+    if (static_cast<unsigned char>(IrReceiver.decodedIRData.command) == static_cast<unsigned char>(0x0006)) {
+      lcd.clear();
+      lcd.print("ALIGNMENT RECEIVED");
+      Serial.println("ALIGNMENT SIGNAL RECEIVED");
+      IrReceiver.resume();
+      return;
+    }
+    else if (static_cast<unsigned char>(IrReceiver.decodedIRData.command) == static_cast<unsigned char>(0x0011)) {
+      lcd.clear();
+      lcd.print("WAITING TO RECEIVE");
+      Serial.println("ESCAPE RECEIVED");
+      delay(50);
+      IrReceiver.resume();
+      return;
+    }
+
+    else {
     if (!currentlyReceiving) {
       currentlyReceiving = true;
       lcd.clear();
@@ -47,9 +67,6 @@ void loop() {
       msgLength = 0;
       Serial.print(F("\n****message received: "));
       Serial.println(recMsg);
-      delay(1500);
-      lcd.clear();
-      lcd.print("WAITING TO RECEIVE");
       IrReceiver.resume();
       return;
     }
@@ -74,5 +91,6 @@ void loop() {
     // IrReceiver.printIRResultRawFormatted(&Serial, true);
 
     IrReceiver.resume();
+  }
   }
 }
