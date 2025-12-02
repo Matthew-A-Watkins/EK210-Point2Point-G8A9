@@ -99,7 +99,9 @@ void loop() {
           lcd.clear();
           lcd.print("Mode: Alignment");
           lcd.setCursor(0, 1);
-          lcd.print("Please use left and right arrow keys.");
+          lcd.print("Please use left and ");
+          lcd.setCursor(0, 2);
+          lcd.print("right arrow keys.");
         default: break;
       }
     }
@@ -110,6 +112,7 @@ void loop() {
     if (keyboard.available()) {
       char ch = keyboard.read();
       if (ch == '\r' || ch == '\n' || ch == '\0') {  // Enter key: finish message
+        msg[msgLength] = '\0'; // to ensure that when msg is empty, transmit just null character
         lcd.clear();
         lcd.print("Msg saved {");
         lcd.print(msgLength);
@@ -123,15 +126,12 @@ void loop() {
         return;
       } else if (ch == 8 || ch == 127) {  // Backspace: remove last character
         if (msgLength > 0) {
-          msgLength--;
-          msg[msgLength] = '\0';
-          lcd.clear();
+          msg[--msgLength] = '\0';
           lcd.clear();
           for (int i = 0; i < msgLength; i++) {
             lcd.setCursor(i % 20, i / 20);
             lcd.print(msg[i]);
           }
-          lcd.print(msg);
           currentLine = 0;
           Serial.print("\b \b");
         }
@@ -141,14 +141,13 @@ void loop() {
           msg[msgLength++] = ch;
           msg[msgLength] = '\0';
           lcd.clear();
-          lcd.print(msg);
-          lcd.clear();
           for (int i = 0; i < msgLength; i++) {
             lcd.setCursor(i % 20, i / 20);
             lcd.print(msg[i]);
           }
           Serial.print(ch);
         } else {
+          lcd.clear();
           Serial.println("\n[Message length limit reached]");
           lcd.setCursor(0, 1);
           lcd.print("** Msg max length **");
@@ -174,18 +173,18 @@ void loop() {
         return;
       }
 
-      if (arrow == PS2_RIGHTARROW) {
+      if (arrow == PS2_LEFTARROW) {
         pos += 5;
         if (pos > 180) pos = 180;
       }
 
-      else if (arrow == PS2_LEFTARROW) {
+      else if (arrow == PS2_RIGHTARROW) {
         pos -= 5;
         if (pos < 0) pos = 0;
       }
       myservo.write(pos);
       IrSender.sendNEC(0x0000, 0x0006, 1);  // send ACK message
-      delay(5);                            //delay to prevent turning too fast
+      delay(5);                             //delay to prevent turning too fast
       return;
     }
   }
